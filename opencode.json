@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "DBAbsensiUNES": {
+      "type": "remote",
+      "url": "https://mcp.supabase.com/mcp?project_ref=fxwtdohwjylsptcnoxhe",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer YOUR_SUPABASE_ACCESS_TOKEN_HERE"
+      }
+    }
+  }
+}

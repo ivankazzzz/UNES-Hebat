@@ -1,0 +1,1056 @@
+import { getCurrentUser, logout, saveUserSession, refreshUserData } from "@/lib/auth";
+import { useNavigate } from "react-router-dom";
+import { User, ArrowLeft, LogOut, Building2, MapPin, Eye, EyeOff, X, Info, ChevronDown, Check, Loader2, Clock } from "lucide-react";
+import BottomNavigation from "@/components/BottomNavigation";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
+import SuccessModal from "@/components/SuccessModal";
+import NotificationModal from "@/components/NotificationModal";
+
+interface AttendanceLocation {
+  id: string;
+  user_id: string | null;
+  building_id?: string | null;
+  unit_kerja: string;
+  latitude: number;
+  longitude: number;
+  radius_meters: number;
+  location_name: string | null;
+  is_active: boolean;
+  is_primary?: boolean | null;
+  priority?: number | null;
+  created_at?: string | null;
+}
+
+interface UserAllowedLocation {
+  unit_kerja: string;
+  location_name: string | null;
+  is_primary: boolean;
+}
+
+interface UserProfileData {
+  id: string;
+  username: string;
+  full_name: string;
+  role: 'superadmin' | 'admin' | 'dosen' | 'pegawai';
+  unit_kerja: string | null;
+  primary_location: string | null;
+}
+
+interface UserWorkSchedule {
+  id: string;
+  user_id: string;
+  check_in_start: string;
+  check_in_end: string;
+  check_out_start: string;
+  check_out_end: string;
+  reason: string | null;
+  is_active: boolean;
+}
+
+const DEFAULT_WORK_SCHEDULE = {
+  check_in_start: "08:30:00",
+  check_in_end: "09:00:00",
+  check_out_start: "15:00:00",
+  check_out_end: "17:00:00"
+};
+
+const formatTimeDisplay = (timeValue: string): string => {
+  const [rawHours = "", rawMinutes = ""] = (timeValue || "").split(":");
+  const hours = String(rawHours).padStart(2, "0");
+  const minutes = String(rawMinutes).padStart(2, "0");
+  return `${hours}:${minutes}`;
+};
+
+const formatScheduleRange = (start: string, end: string): string => {
+  return `${formatTimeDisplay(start)} - ${formatTimeDisplay(end)} WIB`;
+};
+
+export default function Profile() {
+  const navigate = useNavigate();
+  const currentUser = getCurrentUser();
+  const [userProfile, setUserProfile] = useState<UserProfileData | null>(null);
+  const [attendanceLocation, setAttendanceLocation] = useState<AttendanceLocation | null>(null);
+  const [allowedLocations, setAllowedLocations] = useState<UserAllowedLocation[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [userWorkSchedule, setUserWorkSchedule] = useState<UserWorkSchedule | null>(null);
+  const [workScheduleLoaded, setWorkScheduleLoaded] = useState(false);
+  
+  // State for password change modal with smooth animation
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
+  const [isPasswordModalVisible, setIsPasswordModalVisible] = useState(false);
+  const [isPasswordModalAnimating, setIsPasswordModalAnimating] = useState(false);
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: ""
+  });
+  const [showPasswords, setShowPasswords] = useState({
+    current: false,
+    new: false,
+    confirm: false
+  });
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
+  
+  // State for error notification modal
+  const [errorModal, setErrorModal] = useState({
+    isOpen: false,
+    title: "",
+    message: ""
+  });
+
+  // State for superadmin location selector
+  const [allLocations, setAllLocations] = useState<AttendanceLocation[]>([]);
+  const [isLocationDropdownOpen, setIsLocationDropdownOpen] = useState(false);
+  const [isSavingLocation, setIsSavingLocation] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<AttendanceLocation | null>(null);
+
+  // Helper function to show error
+  const showError = (title: string, message: string) => {
+    setErrorModal({ isOpen: true, title, message });
+  };
+
+  // Open password modal with animation
+  const openPasswordModal = useCallback(() => {
+    setIsPasswordModalVisible(true);
+    setIsPasswordModalAnimating(true);
+    setTimeout(() => {
+      setIsPasswordModalAnimating(false);
+      setIsPasswordModalOpen(true);
+    }, 50);
+  }, []);
+
+  // Close password modal with animation
+  const closePasswordModal = useCallback(() => {
+    setIsPasswordModalAnimating(true);
+    setIsPasswordModalOpen(false);
+    setTimeout(() => {
+      setIsPasswordModalVisible(false);
+      setIsPasswordModalAnimating(false);
+      setPasswordForm({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: ""
+      });
+      setShowPasswords({ current: false, new: false, confirm: false });
+    }, 350);
+  }, []);
+
+  // Load user profile data
+  useEffect(() => {
+    const loadUserProfile = async () => {
+      // Refresh supaya data profil terbaru selalu terpakai.
+      const user = await refreshUserData();
+      if (user?.id) {
+        try {
+           const { data, error } = await supabase
+              .from('users')
+              .select('id, username, full_name, role, unit_kerja, primary_location')
+              .eq('id', user.id)
+              .single();
+ 
+           if (data && !error) {
+             const profileData = data as unknown as UserProfileData;
+             setUserProfile(profileData);
+            
+            // Load attendance locations for this user (primary + secondary)
+            if (profileData.id) {
+              const { data: locationData, error: locationError } = await supabase
+                .from('attendance_locations')
+                .select('*')
+                .eq('user_id', profileData.id)
+                .eq('is_active', true)
+                .order('priority', { ascending: true, nullsFirst: false })
+                .order('is_primary', { ascending: false })
+                .order('created_at', { ascending: true });
+
+              if (locationError) {
+                console.error('Error loading locations:', locationError);
+              }
+
+              const locationsRaw = (locationData as AttendanceLocation[]) || [];
+              const primaryLocation =
+                locationsRaw.find((loc) => loc.priority === 1) ??
+                locationsRaw.find((loc) => loc.is_primary) ??
+                locationsRaw[0];
+
+              if (primaryLocation) {
+                setAttendanceLocation(primaryLocation);
+              }
+
+              const normalizedNames = new Set<string>();
+              const allowed = locationsRaw
+                .filter((loc) => !!loc.location_name)
+                .filter((loc) => {
+                  const normalized = loc.location_name?.toLowerCase().trim() || '';
+                  if (!normalized || normalizedNames.has(normalized)) return false;
+                  normalizedNames.add(normalized);
+                  return true;
+                })
+                .map((loc) => ({
+                  unit_kerja: loc.unit_kerja,
+                  location_name: loc.location_name,
+                  is_primary: (loc.priority === 1) || (loc.is_primary ?? loc.id === primaryLocation?.id)
+                }));
+
+              setAllowedLocations(allowed);
+            }
+          }
+        } catch (error) {
+          console.error('Error loading profile:', error);
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        setIsLoading(false);
+      }
+    };
+
+    loadUserProfile();
+  }, []); // Empty dependency array - only run once on mount
+
+  // Load user work schedule (jam kerja khusus)
+  useEffect(() => {
+    const fetchUserWorkSchedule = async () => {
+      if (!currentUser?.id) {
+        setWorkScheduleLoaded(true);
+        return;
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from("user_work_schedules")
+          .select("*")
+          .eq("user_id", currentUser.id)
+          .eq("is_active", true)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (!error && data) {
+          setUserWorkSchedule(data as UserWorkSchedule);
+        }
+        setWorkScheduleLoaded(true);
+      } catch (error) {
+        console.error("Error fetching user work schedule:", error);
+        setWorkScheduleLoaded(true);
+      }
+    };
+
+    fetchUserWorkSchedule();
+  }, [currentUser?.id]);
+
+  // Load all attendance locations for superadmin
+  useEffect(() => {
+    const loadAllLocations = async () => {
+      const user = getCurrentUser();
+      if (user?.role === 'superadmin') {
+        try {
+          const { data, error } = await supabase
+            .from('attendance_locations')
+            .select('*')
+            .eq('is_active', true)
+            .order('location_name');
+          
+          if (data && !error) {
+            setAllLocations(data);
+          }
+        } catch (error) {
+          console.error('Error loading locations:', error);
+        }
+      }
+    };
+
+    loadAllLocations();
+  }, []);
+
+  // Handle location selection (just select, not save yet)
+  const handleLocationSelect = (location: AttendanceLocation) => {
+    setSelectedLocation(location);
+  };
+
+  // Save selected location for superadmin (testing purposes)
+  const saveSelectedLocation = async () => {
+    if (currentUser?.role !== 'superadmin' || !selectedLocation) return;
+    
+    setIsSavingLocation(true);
+    try {
+      const { data: existingLocations, error: fetchError } = await supabase
+        .from('attendance_locations')
+        .select('id, location_name, is_primary')
+        .eq('user_id', currentUser.id)
+        .eq('is_active', true);
+
+      if (fetchError) throw fetchError;
+
+      if (existingLocations && existingLocations.length > 0) {
+        const { error: resetError } = await supabase
+          .from('attendance_locations')
+          .update({ is_primary: false })
+          .eq('user_id', currentUser.id)
+          .eq('is_active', true);
+
+        if (resetError) throw resetError;
+      }
+
+      const matchedLocation = existingLocations?.find(
+        (loc) => loc.location_name === selectedLocation.location_name
+      );
+
+      let updatedLocation: AttendanceLocation | null = null;
+
+      if (matchedLocation) {
+        const { data: updated, error: updateError } = await supabase
+          .from('attendance_locations')
+          .update({ is_primary: true })
+          .eq('id', matchedLocation.id)
+          .select('*')
+          .single();
+
+        if (updateError) throw updateError;
+        updatedLocation = updated as AttendanceLocation;
+      } else {
+        const { data: inserted, error: insertError } = await supabase
+          .from('attendance_locations')
+          .insert({
+            user_id: currentUser.id,
+            unit_kerja: selectedLocation.unit_kerja,
+            latitude: selectedLocation.latitude,
+            longitude: selectedLocation.longitude,
+            radius_meters: selectedLocation.radius_meters,
+            location_name: selectedLocation.location_name,
+            building_id: selectedLocation.building_id ?? null,
+            is_active: true,
+            is_primary: true
+          })
+          .select('*')
+          .single();
+
+        if (insertError) throw insertError;
+        updatedLocation = inserted as AttendanceLocation;
+      }
+
+      if (updatedLocation) {
+        setAttendanceLocation(updatedLocation);
+      }
+
+      setIsLocationDropdownOpen(false);
+      setSelectedLocation(null);
+
+      // Refresh to keep local session in sync
+      const refreshedUser = await refreshUserData();
+      if (refreshedUser) {
+        saveUserSession(refreshedUser);
+      }
+      
+    } catch (error) {
+      console.error('Error changing location:', error);
+      showError("Gagal Mengubah Lokasi", "Terjadi kesalahan saat mengubah titik absensi. Silakan coba lagi.");
+    } finally {
+      setIsSavingLocation(false);
+    }
+  };
+
+  // Open location modal and set initial selection
+  const openLocationModal = () => {
+    setSelectedLocation(attendanceLocation);
+    setIsLocationDropdownOpen(true);
+  };
+
+  // Close location modal
+  const closeLocationModal = () => {
+    setIsLocationDropdownOpen(false);
+    setSelectedLocation(null);
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    navigate("/login");
+  };
+
+  // Handle password change
+  const handlePasswordChange = async () => {
+    // Validation 1: Check if all fields are filled
+    if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      showError("Lengkapi Formulir", "Semua field harus diisi untuk mengganti password");
+      return;
+    }
+
+    // Validation 2: Check if current password is numeric only
+    const numberOnlyRegex = /^\d+$/;
+    if (!numberOnlyRegex.test(passwordForm.currentPassword)) {
+      showError("Password Lama Salah Format", "Password lama harus berisi angka saja");
+      return;
+    }
+
+    // Validation 3: Check if new password is numeric only
+    if (!numberOnlyRegex.test(passwordForm.newPassword)) {
+      showError("Password Baru Salah Format", "Password baru hanya boleh berisi angka (0-9)");
+      return;
+    }
+
+    // Validation 4: Check if confirm password is numeric only
+    if (!numberOnlyRegex.test(passwordForm.confirmPassword)) {
+      showError("Konfirmasi Password Salah Format", "Konfirmasi password hanya boleh berisi angka (0-9)");
+      return;
+    }
+
+    // Validation 5: Check if new password matches confirmation
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      showError("Password Tidak Cocok", "Password baru dan konfirmasi password harus sama");
+      return;
+    }
+
+    // Validation 6: Check minimum length
+    if (passwordForm.newPassword.length < 4) {
+      showError("Password Terlalu Pendek", "Password baru minimal 4 angka (contoh: 1234)");
+      return;
+    }
+
+    // Validation 7: Check if new password same as old password
+    if (passwordForm.currentPassword === passwordForm.newPassword) {
+      showError("Password Sama", "Password baru harus berbeda dari password lama");
+      return;
+    }
+
+    // Validation 8: Check maximum length (optional security measure)
+    if (passwordForm.newPassword.length > 20) {
+      showError("Password Terlalu Panjang", "Password maksimal 20 angka untuk keamanan");
+      return;
+    }
+
+    setIsChangingPassword(true);
+
+    try {
+      // Use secure RPC function to change password
+      // This function handles: verification, hashing, updating users table, and user_passwords table
+      const { data: result, error: rpcError } = await supabase.rpc('change_user_password', {
+        user_id_input: currentUser?.id,
+        current_password_input: passwordForm.currentPassword,
+        new_password_input: passwordForm.newPassword
+      });
+
+      if (rpcError) {
+        console.error('Change password RPC error:', rpcError);
+        showError("Kesalahan Sistem", "Gagal mengubah password. Silakan coba lagi.");
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Check result from RPC function
+      if (!result?.success) {
+        const errorMessage = result?.error || "Gagal mengubah password";
+        if (errorMessage.includes("Password lama")) {
+          showError("Password Lama Salah", "Password lama yang Anda masukkan tidak sesuai. Periksa kembali.");
+        } else {
+          showError("Gagal Ubah Password", errorMessage);
+        }
+        setIsChangingPassword(false);
+        return;
+      }
+
+      // Success - close modal with animation then show success modal
+      setIsPasswordModalAnimating(true);
+      setIsPasswordModalOpen(false);
+      
+      setTimeout(() => {
+        setIsPasswordModalVisible(false);
+        setIsPasswordModalAnimating(false);
+        setPasswordForm({
+          currentPassword: "",
+          newPassword: "",
+          confirmPassword: ""
+        });
+        setShowPasswords({ current: false, new: false, confirm: false });
+        
+        // Show success modal after password modal closes
+        setIsSuccessModalOpen(true);
+      }, 350);
+
+    } catch (error) {
+      console.error('Error changing password:', error);
+      showError("Terjadi Kesalahan", "Terjadi kesalahan tidak terduga. Silakan coba lagi atau hubungi admin.");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const profileFields = [
+    {
+      icon: User,
+      label: "Username",
+      value: currentUser?.username,
+      placeholder: "Belum diisi",
+      key: "username"
+    },
+    {
+      icon: Building2,
+      label: "Unit Kerja",
+      value: userProfile?.unit_kerja,
+      placeholder: "Belum diisi",
+      key: "unit_kerja"
+    }
+  ];
+
+  const schedule = userWorkSchedule || DEFAULT_WORK_SCHEDULE;
+  const checkInRange = formatScheduleRange(schedule.check_in_start, schedule.check_in_end);
+  const checkOutRange = formatScheduleRange(schedule.check_out_start, schedule.check_out_end);
+  const isScheduleLoading = isLoading || !workScheduleLoaded;
+
+  // Check if user is superadmin
+  const isSuperAdmin = currentUser?.role === 'superadmin';
+
+  return (
+    <div className="w-full min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950">
+      <div className="max-w-md w-full mx-auto flex flex-col min-h-screen">
+        {/* Header with Glass Effect */}
+        <header className="shrink-0 relative z-20 overflow-hidden bg-[#0081a0] rounded-b-[30px] shadow-sm px-5 py-6 w-full">
+          {/* Decorative Elements */}
+          <div className="absolute top-[-50px] right-[-30px] w-48 h-48 rounded-full bg-white/10 blur-[30px] z-0 pointer-events-none" />
+          <div className="absolute bottom-[-10px] left-[-20px] w-32 h-32 rounded-full bg-white/10 blur-[20px] z-0 pointer-events-none" />
+
+          <div className="relative z-10 flex items-center justify-between w-full">
+              <div className="flex items-center gap-3">
+                  <button
+                      onClick={() => navigate(-1)}
+                      className="flex h-10 w-10 items-center justify-center rounded-full bg-white/20 backdrop-blur-sm border border-white/30 hover:bg-white/30 transition-all shadow-sm"
+                  >
+                      <ArrowLeft className="w-5 h-5 text-white" />
+                  </button>
+                  <div className="flex flex-col">
+                      <h1 className="text-lg font-bold tracking-tight text-white mb-0 drop-shadow-sm">Profil Akun</h1>
+                      <p className="text-[11px] text-white/90 font-medium tracking-wide">Informasi data diri Anda</p>
+                  </div>
+              </div>
+              {/* Logo Right */}
+              <div className="w-10 h-10 rounded-full bg-white flex items-center justify-center shadow-md p-1.5 ml-auto relative group">
+                  <img src="/unes.png" alt="UNES" className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-110" />
+              </div>
+          </div>
+        </header>
+
+        {/* Main Content */}
+        <main className="flex-1 overflow-y-auto pb-28 scrollbar-thin">
+          <div className="p-5 animate-fade-in-up">
+            {/* Profile Card - Professional Design */}
+            <section className="mb-6">
+              <div className="relative overflow-hidden rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
+                {/* Top accent bar */}
+                <div className="h-1.5 bg-[#0081a0]" />
+                
+                <div className="p-6">
+                  {/* Name */}
+                  <h2 className="font-semibold text-xl text-slate-900 dark:text-slate-100 leading-tight">
+                    {currentUser?.full_name || "Nama Pengguna"}
+                  </h2>
+                  
+                  {/* Role Badge */}
+                  <div className="mt-3">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium ${
+                      currentUser?.role === 'superadmin'
+                        ? 'bg-purple-700 text-white'
+                        : currentUser?.role === 'admin' 
+                        ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900' 
+                        : currentUser?.role === 'dosen'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-slate-600 text-white'
+                    }`}>
+                      {currentUser?.role === 'superadmin' ? 'Super Administrator' : currentUser?.role === 'admin' ? 'Administrator' : currentUser?.role === 'dosen' ? 'Dosen' : 'Tendik'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Profile Details */}
+            <section className="space-y-4 mb-8">
+              <h2 className="section-title">
+                Informasi Profil
+              </h2>
+
+              <div className="space-y-3 stagger-children">
+                {profileFields.map((field) => {
+                  const fieldCard = (
+                    <div
+                      className="relative overflow-hidden rounded-xl bg-white dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-700/50 p-4 card-hover shadow-sm"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#0081a0]/10 flex items-center justify-center">
+                          <field.icon className="w-5 h-5 text-[#0081a0]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                            {field.label}
+                          </p>
+                          {isLoading ? (
+                            <div className="h-5 w-32 skeleton rounded mt-1" />
+                          ) : (
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate mt-0.5">
+                              {field.value || field.placeholder}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+
+                  if (field.key !== "unit_kerja") {
+                    return (
+                      <div key={field.key}>
+                        {fieldCard}
+                      </div>
+                    );
+                  }
+
+                  return [
+                    <div
+                      key="work-schedule"
+                      className="relative overflow-hidden rounded-xl bg-white dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-700/50 p-4 card-hover shadow-sm"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#0081a0]/10 flex items-center justify-center">
+                          <Clock className="w-5 h-5 text-[#0081a0]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                            Jam Absensi
+                          </p>
+                          {isScheduleLoading ? (
+                            <div className="mt-2 space-y-2">
+                              <div className="h-4 w-40 skeleton rounded" />
+                              <div className="h-4 w-36 skeleton rounded" />
+                            </div>
+                          ) : (
+                            <div className="mt-2 space-y-2">
+                              <div>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                                  Jam Masuk
+                                </p>
+                                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                  {checkInRange}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                                  Jam Pulang
+                                </p>
+                                <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                  {checkOutRange}
+                                </p>
+                              </div>
+                              <p className="text-[10px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                                <Info className="w-3 h-3" />
+                                Sistem menerima absensi sesuai rentang waktu di atas.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>,
+                    <div key={field.key}>{fieldCard}</div>
+                  ];
+                })}
+
+                {/* Titik Absensi - Special handling for superadmin with dropdown */}
+                <div className="relative rounded-xl bg-white dark:bg-slate-900/50 border border-slate-200/80 dark:border-slate-700/50 p-4 card-hover shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-[#0081a0]/10 flex items-center justify-center">
+                      <MapPin className="w-5 h-5 text-[#0081a0]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+                        Titik Absensi Anda
+                      </p>
+                      {isLoading ? (
+                        <div className="h-5 w-32 skeleton rounded mt-1" />
+                      ) : isSuperAdmin ? (
+                        // Superadmin: Show dropdown selector
+                        <div className="mt-1">
+                          <button
+                            onClick={openLocationModal}
+                            disabled={isSavingLocation}
+                            className="w-full flex items-center justify-between gap-2 px-3 py-2 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700 rounded-lg text-left hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors disabled:opacity-50"
+                          >
+                            <span className="text-sm font-semibold text-purple-700 dark:text-purple-300 truncate">
+                              {isSavingLocation ? (
+                                <span className="flex items-center gap-2">
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                  Menyimpan...
+                                </span>
+                              ) : (
+                                attendanceLocation?.location_name || "Pilih Titik Absensi"
+                              )}
+                            </span>
+                            <ChevronDown className={`w-4 h-4 text-purple-500 flex-shrink-0 transition-transform ${isLocationDropdownOpen ? 'rotate-180' : ''}`} />
+                          </button>
+
+                          {/* Helper text for superadmin */}
+                          <p className="text-[10px] text-purple-600 dark:text-purple-400 mt-1.5 flex items-center gap-1">
+                            <Info className="w-3 h-3" />
+                            Mode testing: Pilih titik absensi untuk simulasi
+                          </p>
+                        </div>
+                      ) : (
+                        // Regular users: Show all allowed locations (primary + secondary)
+                        <div className="mt-1.5 space-y-2">
+                          {allowedLocations.length === 0 ? (
+                            <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                              Belum ditentukan
+                            </p>
+                          ) : (
+                            allowedLocations.map((location, index) => (
+                              <div 
+                                key={index}
+                                className="flex items-start gap-2"
+                              >
+                                <div className="flex-shrink-0 mt-0.5">
+                                  <div className={`w-2 h-2 rounded-full ${
+                                    location.is_primary 
+                                      ? 'bg-blue-600 dark:bg-blue-400' 
+                                      : 'bg-emerald-500 dark:bg-emerald-400'
+                                  }`} />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+                                    {location.location_name || location.unit_kerja}
+                                  </p>
+                                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                                    {location.is_primary ? 'Lokasi Utama' : 'Lokasi Sekunder'}
+                                  </p>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                          
+                          {/* Info badge for users with multiple locations */}
+                          {allowedLocations.length > 1 && (
+                            <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+                              <p className="text-[10px] text-[#0081a0] flex items-center gap-1">
+                                <Info className="w-3 h-3" />
+                                Anda dapat absen di {allowedLocations.length} lokasi berbeda
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Action Buttons */}
+            <div className="pt-4 space-y-3">
+              {/* Change Password Button */}
+               <button
+                 onClick={openPasswordModal}
+                 className="w-full rounded-xl bg-[#0081a0]/5 dark:bg-[#0081a0]/10 border-2 border-blue-500 dark:border-blue-400 text-[#0081a0] font-semibold py-3.5 text-center transition-all duration-200 hover:bg-blue-100 dark:hover:bg-blue-900/40"
+               >
+                 <span className="flex items-center justify-center gap-2">
+                   Ganti Password
+                 </span>
+               </button>
+
+              {/* Logout Button */}
+              <button
+                onClick={handleLogout}
+                className="w-full rounded-xl bg-red-50 dark:bg-red-900/20 border-2 border-red-500 dark:border-red-400 text-red-600 dark:text-red-400 font-semibold py-3.5 text-center transition-all duration-200 hover:bg-red-100 dark:hover:bg-red-900/40"
+              >
+                <span className="flex items-center justify-center gap-2">
+                  <LogOut className="w-5 h-5" />
+                  Keluar
+                </span>
+              </button>
+            </div>
+          </div>
+        </main>
+
+        {/* Bottom Navigation */}
+        <BottomNavigation />
+
+        {/* Password Change Modal with Smooth Animation */}
+        {isPasswordModalVisible && (
+          <div 
+            className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-all duration-300 ease-out ${
+              isPasswordModalAnimating || !isPasswordModalOpen ? 'bg-black/0' : 'bg-black/60'
+            }`}
+            style={{ backdropFilter: isPasswordModalAnimating || !isPasswordModalOpen ? 'blur(0px)' : 'blur(8px)' }}
+            onClick={closePasswordModal}
+          >
+            <div 
+              className={`relative w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden transform transition-all duration-300 ease-out ${
+                isPasswordModalAnimating || !isPasswordModalOpen
+                  ? 'scale-95 opacity-0 translate-y-4' 
+                  : 'scale-100 opacity-100 translate-y-0'
+              }`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Top gradient accent */}
+              <div className="h-1 bg-gradient-to-r from-[#0081a0] to-[#006f8a]" />
+              
+              {/* Header */}
+               <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-800">
+                 <div className="flex items-center gap-3">
+                   <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                     Ganti Password
+                   </h3>
+                 </div>
+                <button
+                  onClick={closePasswordModal}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-all duration-200 hover:rotate-90"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto">
+                {/* Tips Section */}
+                <div className="flex gap-3 p-4 bg-[#0081a0]/5 dark:bg-[#0081a0]/10 border border-[#0081a0]/20 dark:border-[#0081a0]/30 rounded-xl">
+                  <Info className="w-5 h-5 text-[#0081a0] flex-shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-[#0081a0] dark:text-white">
+                      Tips Keamanan Password
+                    </p>
+                    <ul className="text-xs text-[#0081a0]/80 dark:text-[#0081a0]/90 space-y-1 list-disc list-inside">
+                      <li>Gunakan kombinasi angka minimal 4 digit</li>
+                      <li>Hindari tanggal lahir atau angka yang mudah ditebak</li>
+                      <li>Jangan bagikan password Anda ke siapapun</li>
+                    </ul>
+                  </div>
+                </div>
+
+                {/* Current Password */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Password Lama
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPasswords.current ? "text" : "password"}
+                      value={passwordForm.currentPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
+                      className="w-full px-4 py-3 pr-12 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-[#0081a0] focus:border-transparent transition-all duration-200 text-slate-900 dark:text-slate-100"
+                      placeholder="Masukkan password lama"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords({ ...showPasswords, current: !showPasswords.current })}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+                    >
+                      {showPasswords.current ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* New Password */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Password Baru
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPasswords.new ? "text" : "password"}
+                      value={passwordForm.newPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                      className="w-full px-4 py-3 pr-12 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-[#0081a0] focus:border-transparent transition-all duration-200 text-slate-900 dark:text-slate-100"
+                      placeholder="Minimal 4 angka (contoh: 1234)"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords({ ...showPasswords, new: !showPasswords.new })}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+                    >
+                      {showPasswords.new ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Confirm Password */}
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    Konfirmasi Password Baru
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showPasswords.confirm ? "text" : "password"}
+                      value={passwordForm.confirmPassword}
+                      onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                      className="w-full px-4 py-3 pr-12 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-[#0081a0] focus:border-transparent transition-all duration-200 text-slate-900 dark:text-slate-100"
+                      placeholder="Ulangi password baru"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswords({ ...showPasswords, confirm: !showPasswords.confirm })}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 transition-colors"
+                    >
+                      {showPasswords.confirm ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex gap-3 p-5 border-t border-slate-200 dark:border-slate-800">
+                <button
+                  onClick={closePasswordModal}
+                  className="flex-1 px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-semibold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all duration-200 active:scale-[0.98]"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={handlePasswordChange}
+                  disabled={isChangingPassword}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-semibold hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-[0.98] shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40"
+                >
+                  {isChangingPassword ? "Menyimpan..." : "Simpan"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Success Modal */}
+        <SuccessModal
+          isOpen={isSuccessModalOpen}
+          onClose={() => setIsSuccessModalOpen(false)}
+          title="Password Berhasil Diubah!"
+          message="Password Anda telah berhasil diperbarui. Gunakan password baru untuk login berikutnya."
+          buttonText="OK"
+        />
+
+        {/* Error Notification Modal */}
+        <NotificationModal
+          isOpen={errorModal.isOpen}
+          onClose={() => setErrorModal({ ...errorModal, isOpen: false })}
+          type="error"
+          title={errorModal.title}
+          message={errorModal.message}
+        />
+
+        {/* Location Selector Modal for Superadmin */}
+        {isLocationDropdownOpen && (
+          <div 
+            className="fixed inset-0 z-50 flex items-end justify-center sm:items-center"
+            onClick={closeLocationModal}
+          >
+            {/* Backdrop */}
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+            
+            {/* Modal Content */}
+            <div 
+              className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-t-2xl sm:rounded-2xl shadow-2xl max-h-[70vh] flex flex-col animate-slide-up"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Handle bar for mobile */}
+              <div className="flex justify-center pt-3 pb-1 sm:hidden">
+                <div className="w-10 h-1 bg-slate-300 dark:bg-slate-700 rounded-full" />
+              </div>
+
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200 dark:border-slate-800">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                    Pilih Titik Absensi
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    {allLocations.length} lokasi tersedia untuk testing
+                  </p>
+                </div>
+                <button
+                  onClick={closeLocationModal}
+                  className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+
+              {/* List */}
+              <div className="flex-1 overflow-y-auto p-3">
+                {allLocations.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-500">
+                    <MapPin className="w-12 h-12 mb-3 opacity-30" />
+                    <p className="text-sm">Tidak ada titik absensi tersedia</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {allLocations.map((loc) => {
+                      const isSelected = selectedLocation?.id === loc.id;
+                      return (
+                        <button
+                          key={loc.id}
+                          onClick={() => handleLocationSelect(loc)}
+                          className={`w-full flex items-center gap-4 p-4 text-left rounded-xl transition-all duration-150 ${
+                            isSelected
+                              ? 'bg-purple-50 dark:bg-purple-900/30 ring-2 ring-purple-500'
+                              : 'bg-slate-50 dark:bg-slate-800/50 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          {/* Radio indicator */}
+                          <div className={`flex-shrink-0 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+                            isSelected
+                              ? 'bg-purple-500 border-purple-500'
+                              : 'border-slate-300 dark:border-slate-600'
+                          }`}>
+                            {isSelected && (
+                              <Check className="w-3 h-3 text-white" />
+                            )}
+                          </div>
+                          
+                          {/* Location info */}
+                          <div className="flex-1 min-w-0">
+                            <p className={`font-semibold truncate ${
+                              isSelected
+                                ? 'text-purple-700 dark:text-purple-300'
+                                : 'text-slate-800 dark:text-slate-100'
+                            }`}>
+                              {loc.location_name || loc.unit_kerja}
+                            </p>
+                            <p className="text-sm text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                              {loc.unit_kerja}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer with Buttons */}
+              <div className="flex gap-3 p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">
+                <button
+                  onClick={closeLocationModal}
+                  className="flex-1 px-4 py-3 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-semibold border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700 transition-all duration-200 active:scale-[0.98]"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={saveSelectedLocation}
+                  disabled={isSavingLocation || !selectedLocation || selectedLocation?.id === attendanceLocation?.id}
+                  className="flex-1 px-4 py-3 bg-purple-600 text-white rounded-xl font-semibold hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 active:scale-[0.98] shadow-lg shadow-purple-500/25"
+                >
+                  {isSavingLocation ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Menyimpan...
+                    </span>
+                  ) : (
+                    "Simpan"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

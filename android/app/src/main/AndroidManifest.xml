@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Location Permissions - Required for attendance -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    
+    <!-- Camera Permission - Required for attendance photo -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    
+    <!-- Query installed packages - Required for mock location detection -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" 
+        android:maxSdkVersion="29" />
+    
+    <!-- Package visibility for Android 11+ to detect mock location apps -->
+    <queries>
+        <!-- Known Fake GPS apps -->
+        <package android:name="com.lexa.fakegps" />
+        <package android:name="com.blogspot.newapphorizons.fakegps" />
+        <package android:name="com.theappninjas.gpsjoystick" />
+        <package android:name="com.incorporateapps.fakegps.fre" />
+        <package android:name="com.fakegps.mock" />
+        <package android:name="com.evezzon.fakegps" />
+        <package android:name="com.gsmartstudio.fakegps" />
+        <package android:name="com.lkr.fakelocation" />
+        <package android:name="com.fake.gps.location" />
+        <package android:name="com.rosteam.gpsemulator" />
+        <package android:name="com.divi.fakeGPS" />
+        <package android:name="com.pe.fakegpsrun" />
+        <package android:name="org.hola.gpslocation" />
+        <package android:name="com.byterev.bytefakegpslocation" />
+        <package android:name="com.location.changer" />
+        <package android:name="com.fakegps.joystick" />
+        <package android:name="com.lexa.fakegps.pro" />
+        <package android:name="com.ltp.fakegps" />
+        <package android:name="com.ltp.pro.fakelocation" />
+        <package android:name="com.mock.location" />
+        <package android:name="ru.gavrikov.mocklocations" />
+        <!-- Xposed Framework -->
+        <package android:name="de.robv.android.xposed.installer" />
+    </queries>
+</manifest>
