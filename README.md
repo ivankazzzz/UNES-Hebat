@@ -10,6 +10,8 @@ dilengkapi izin/cuti/dinas luar, laporan PDF, dan notifikasi Telegram.
 
 **Web (PWA-friendly) • Android & iOS via Capacitor • Backend Supabase**
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 </div>
 
 ---
@@ -139,8 +141,9 @@ Menemukan celah keamanan? **Jangan** buka issue publik — baca [SECURITY.md](SE
 
 ## 📜 Lisensi
 
-Belum ditentukan — hubungi pemilik repo untuk penggunaan di luar evaluasi/pembelajaran.
-(// TODO: pilih lisensi open source, mis. MIT.)
+[MIT](LICENSE) © 2026 Irfan Ananda Ismail — gratis dipakai, diubah, dan
+disebarluaskan, dengan satu syarat: **wajib mencantumkan credit copyright di atas**
+di setiap salinan/bagian substansial dari software ini.
 
 ## 🙏 Kredit
 
